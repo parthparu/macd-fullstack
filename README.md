@@ -11,7 +11,19 @@ macd-fullstack/
     requirements.txt    <- Python dependencies
   frontend/
     src/
-      App.jsx           <- React UI: charts, train/test panels, signal display
+      App.jsx           <- Root: state, derived values, layout composition
+      styles.js         <- Global CSS string
+      utils.js          <- formatCompact, presetDomain helpers
+      components/
+        Topbar.jsx          <- Symbol input, date pickers, mode tabs, run button
+        LeftSidebar.jsx     <- Overview, strategy params, display, signal logic, indicators
+        ChartShell.jsx      <- Chart header, toolbars, OHLCV bar, hover card, D3 chart
+        RightSidebar.jsx    <- Signal badge, backtests, generalization, trade log
+        StatusBar.jsx       <- Bottom status row
+        CombinedChart.jsx   <- D3 candlestick + MACD panel (zoom/pan)
+        EquityMini.jsx      <- Small equity curve SVG
+        BacktestPanel.jsx   <- Stat grid + equity curve + final capital
+        StatCard.jsx        <- Single metric display card
       main.jsx          <- Entry point
     index.html
     package.json
