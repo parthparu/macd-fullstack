@@ -111,7 +111,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def simple_backtest(df: pd.DataFrame, rr: float = 1.5, sw_window: int = 8,
-                    initial_capital: float = 100_000, commission: float = 0.0002) -> dict:
+                    initial_capital: float = 100_000, commission: float = 0.0002,
+                    interval: str = "1h") -> dict:
     closes = df["Close"].values
     highs = df["High"].values
     lows = df["Low"].values
@@ -219,7 +220,8 @@ def simple_backtest(df: pd.DataFrame, rr: float = 1.5, sw_window: int = 8,
     rets = [(eqs[i] - eqs[i - 1]) / eqs[i - 1] for i in range(1, len(eqs))]
     mean_r = np.mean(rets) if rets else 0
     std_r = np.std(rets) if rets else 0
-    sharpe = (mean_r / std_r * np.sqrt(252 * 7)) if std_r > 0 else 0
+    bars_per_year = 252 if interval == "1d" else 252 * 7
+    sharpe = (mean_r / std_r * np.sqrt(bars_per_year)) if std_r > 0 else 0
 
     return {
         "trades": trades,
@@ -248,13 +250,20 @@ def fetch_yfinance(symbol: str, start: str, end: str, interval: str = "1h") -> p
     if df.empty:
         raise HTTPException(status_code=404, detail=f"No data for {symbol}")
 
+    # Flatten MultiIndex columns (yfinance v0.2+ always returns MultiIndex)
     if isinstance(df.columns, pd.MultiIndex):
-        try:
+        # Try to select the specific ticker level first
+        sym_upper = symbol.upper()
+        if sym_upper in df.columns.get_level_values(1):
+            df = df.xs(sym_upper, axis=1, level=1)
+        elif symbol in df.columns.get_level_values(1):
             df = df.xs(symbol, axis=1, level=1)
-        except KeyError:
+        else:
+            # Fall back: just drop the ticker level
             df.columns = df.columns.get_level_values(0)
 
-    df.columns = [c.title() for c in df.columns]
+    # Normalize column names to Title Case (Open, High, Low, Close, Volume)
+    df.columns = [str(c).strip().title() for c in df.columns]
     df = df.dropna()
     df.index = pd.to_datetime(df.index, utc=True)
     return df
@@ -303,12 +312,24 @@ def get_data(
     raw_test = fetch_yfinance(symbol, test_start, test_end, interval)
 
     df_train = build_features(raw_train)
-    df_test = build_features(raw_test)
+
+    # Warm up EMA/MACD for the test period using tail of training data.
+    # Without this, on 1d the test period loses ~200 rows to NaN warmup,
+    # leaving too few bars to generate signals.
+    WARMUP = 220  # needs >= EMA_LEN (200)
+    warmup_tail = raw_train.tail(WARMUP)
+    raw_test_warmed = pd.concat([warmup_tail, raw_test])
+    raw_test_warmed = raw_test_warmed[~raw_test_warmed.index.duplicated(keep="last")]
+    df_test_warmed = build_features(raw_test_warmed)
+    # Keep only actual test rows (drop warmup period)
+    test_start_dt = pd.to_datetime(test_start, utc=True)
+    df_test = df_test_warmed[df_test_warmed.index >= test_start_dt].copy()
+
 
     extra = ["EMA200", "MACD", "MACD_signal_line", "MACD_hist", "ema_signal", "macd_signal", "pre_signal"]
 
-    train_bt = simple_backtest(df_train, rr=rr, sw_window=sw_window)
-    test_bt = simple_backtest(df_test, rr=rr, sw_window=sw_window)
+    train_bt = simple_backtest(df_train, rr=rr, sw_window=sw_window, interval=interval)
+    test_bt = simple_backtest(df_test, rr=rr, sw_window=sw_window, interval=interval)
 
     train_ohlcv = df_to_ohlcv_list(df_train, extra)
     test_ohlcv = df_to_ohlcv_list(df_test, extra)
@@ -336,4 +357,4 @@ def get_data(
 
 @app.get("/api/symbols")
 def get_symbols():
-    return ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOGL", "META", "SPY", "QQQ", "EURUSD=X", "BTC-USD", "ETH-USD"]
+    return ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOGL", "META", "SPY", "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "TCS.NS", "INFY.NS", "BHARTIARTL.NS", "SBIN.NS", "HINDUNILVR.NS", "ITC.NS", "LT.NS"]
